@@ -1,0 +1,19 @@
+# IDE files (PyCharm)
+.idea/
+
+# Python virtual environment
+.venv/
+venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Secrets file - VERY IMPORTANT
+.env
+
+# Generated reports
+*.csv
+
+# Streamlit specific files
+.streamlit/

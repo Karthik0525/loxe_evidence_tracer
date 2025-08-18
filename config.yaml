@@ -1,0 +1,13 @@
+# General AWS settings
+aws:
+  region: 'us-east-2'
+
+# SOC 2 controls we are targeting for our MVP
+soc2_controls:
+  - control_id: 'CC6.1'
+    description: 'Logical access security'
+    keywords: ['iam', 's3_public_access', 'security_group']
+
+  - control_id: 'CC8.1'
+    description: 'Change Management'
+    keywords: ['cloudtrail', 'github_branch_protection']
