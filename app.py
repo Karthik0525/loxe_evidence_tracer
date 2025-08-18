@@ -12,11 +12,9 @@ st.set_page_config(
     layout="centered"
 )
 
-# --- ⬇️ IMPORTANT: REPLACE THESE THREE VALUES ⬇️ ---
-YOUR_APP_ACCOUNT_ID = "123456789012" # <-- REPLACE with your 12-digit AWS Account ID.
-YOUR_APP_REGION = "us-east-1"      # <-- REPLACE with your AWS region (e.g., us-east-2).
-TEMPLATE_S3_URL = "https://your-bucket-name.s3.amazonaws.com/templates/your-template-name.yaml" # <-- REPLACE with your full S3 Object URL.
-# --- ⬆️ IMPORTANT: END OF VALUES TO REPLACE ⬆️ ---
+YOUR_APP_ACCOUNT_ID = "828750669333"
+YOUR_APP_REGION = "us-east-2"
+TEMPLATE_S3_URL = "https://loxe-evidence-tracer-testbucket.s3.us-east-2.amazonaws.com/loxe-iam-role-template.yaml"
 
 
 # --- UI Sections ---
