@@ -40,7 +40,7 @@ class EvidenceProcessor:
 
         # Next, loop through and yield each finding one by one
         for bucket in s3_buckets:
-            finding = self.rules_engine.check_s_public_access_block(bucket)
+            finding = self.rules_engine.check_s3_public_access_block(bucket)
             yield None, [finding]  # Yield a list containing one finding
 
         print("✅ S3 checks complete.")
