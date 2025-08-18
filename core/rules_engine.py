@@ -1,5 +1,5 @@
 from botocore.exceptions import ClientError
-
+from .data_models import EvidenceFinding
 
 class RulesEngine:
     """
@@ -22,15 +22,11 @@ class RulesEngine:
         This is a common requirement for SOC 2 CC6.1.
 
         :param bucket_name: The name of the S3 bucket to check.
-        :return: A dictionary containing the evidence finding.
+        :return: An EvidenceFinding dataclass object.
         """
-        finding = {
-            'control_id': 'CC6.1',
-            'resource': bucket_name,
-            'status': '',
-            'description': 'S3 bucket Public Access Block is enabled',
-            'evidence': {}
-        }
+        status = ''
+        description = ''
+        evidence_details = {}
 
         try:
             pab_config = self.s3_client.get_public_access_block(Bucket=bucket_name)
@@ -44,25 +40,31 @@ class RulesEngine:
             ])
 
             if is_compliant:
-                finding['status'] = 'PASS'
+                status = 'PASS'
+                description = 'S3 bucket Public Access Block is enabled.'
             else:
-                finding['status'] = 'FAIL'
-                finding['description'] = 'S3 bucket Public Access Block is not fully enabled.'
+                status = 'FAIL'
+                description = 'S3 bucket Public Access Block is not fully enabled.'
 
-            finding['evidence'] = config
+            evidence_details = config
 
         except ClientError as e:
             if e.response['Error']['Code'] == 'NoSuchPublicAccessBlockConfiguration':
-                finding['status'] = 'FAIL'
-                finding['description'] = 'S3 bucket does not have a Public Access Block configured.'
-                finding['evidence'] = {'error': 'NoSuchPublicAccessBlockConfiguration'}
+                status = 'FAIL'
+                description = 'S3 bucket does not have a Public Access Block configured.'
+                evidence_details = {'error': 'NoSuchPublicAccessBlockConfiguration'}
             else:
-                # Handle other potential errors like Access Denied
-                finding['status'] = 'ERROR'
-                finding['description'] = f"Could not check bucket '{bucket_name}'."
-                finding['evidence'] = {'error': str(e)}
+                status = 'ERROR'
+                description = f"Could not check bucket '{bucket_name}'."
+                evidence_details = {'error': str(e)}
 
-        return finding
+        return EvidenceFinding(
+            control_id='CC6.1',
+            resource=bucket_name,
+            status=status,
+            description=description,
+            evidence=evidence_details
+        )
 
 
 if __name__ == "__main__":

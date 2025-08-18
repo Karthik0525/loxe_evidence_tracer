@@ -1,5 +1,3 @@
-# app.py
-
 import streamlit as st
 import pandas as pd
 import uuid
@@ -63,38 +61,80 @@ st.header("Step 2: Run the Evidence Tracer")
 if st.button("🔎 Map Evidence", type="secondary"):
     if not role_arn_input:
         st.error("Please provide the Role ARN from the CloudFormation setup.")
-    elif "123456789012" in YOUR_APP_ACCOUNT_ID or "your-bucket-name" in TEMPLATE_S3_URL:
-        st.error("Please replace the placeholder values at the top of the app.py file before running.")
+    # ... (rest of your checks) ...
     else:
-        with st.spinner("Connecting to your AWS account and running checks... This may take a moment."):
-            try:
-                # Initialize our backend with the user-provided role
-                processor = EvidenceProcessor(
-                    role_arn=role_arn_input,
-                    external_id=st.session_state.external_id
+        # --- PROGRESS BAR AND REAL-TIME UPDATES ---
+        progress_bar = st.progress(0, text="Initializing...")
+        status_text = st.empty()
+        all_findings = []
+
+        try:
+            processor = EvidenceProcessor(
+                role_arn=role_arn_input,
+                external_id=st.session_state.external_id
+            )
+
+            # The first item yielded is the total count
+            total_items, initial_finding = next(processor.run_s3_checks())
+
+            if initial_finding and initial_finding[0].status == 'ERROR':
+                st.error(f"Could not connect to AWS: {initial_finding[0].description}")
+                progress_bar.empty()  # Remove the progress bar
+            elif total_items == 0:
+                st.warning("The tracer ran successfully but found no S3 buckets to analyze.")
+                progress_bar.empty()
+            else:
+                # Now, loop through the rest of the yielded findings
+                for i, (total, findings_batch) in enumerate(processor.run_s3_checks()):
+                    if findings_batch:
+                        finding = findings_batch[0]
+                        all_findings.append(finding)
+
+                        # Update UI in real-time
+                        progress_percentage = (i + 1) / total_items
+                        progress_bar.progress(progress_percentage, text=f"Scanning item {i + 1}/{total_items}")
+                        status_text.info(f"Checking resource: {finding.resource}...")
+
+                status_text.success("Scan complete!")
+
+                # --- Display Final Results ---
+                st.subheader("Compliance Health Score & Report")
+
+                fresh_count = sum(1 for f in all_findings if f.freshness.name == 'FRESH')
+                stale_count = sum(1 for f in all_findings if f.freshness.name == 'STALE')
+                expired_count = sum(1 for f in all_findings if f.freshness.name == 'EXPIRED')
+
+                health_score = (fresh_count / total_items) * 100
+
+                st.metric("Overall Health", f"{health_score:.1f}%")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Fresh Evidence", fresh_count)
+                col2.metric("Stale Evidence", stale_count)
+                col3.metric("Expired Evidence", expired_count)
+
+                display_data = [{
+                    "control_id": f.control_id, "resource": f.resource, "status": f.status,
+                    "description": f.description, "freshness": f.freshness.value,
+                    "timestamp": f.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')
+                } for f in all_findings]
+
+                df = pd.DataFrame(display_data)
+                st.dataframe(df)
+
+
+                @st.cache_data
+                def convert_df_to_csv(df_to_convert):
+                    return df_to_convert.to_csv(index=False).encode('utf-8')
+
+
+                csv = convert_df_to_csv(df)
+                st.download_button(
+                    label="⬇️ Download Report as CSV",
+                    data=csv,
+                    file_name="soc2_evidence_report.csv",
+                    mime="text/csv",
                 )
-                findings = processor.run_s3_checks()
 
-                if findings and findings[0].get('status') == 'ERROR':
-                     st.error(f"Could not connect to AWS: {findings[0]['description']}")
-                elif findings:
-                    st.success(f"Success! Found {len(findings)} pieces of S3 evidence.")
-                    df = pd.DataFrame(findings)
-                    st.dataframe(df)
-
-                    # Provide a download button for the CSV report
-                    @st.cache_data
-                    def convert_df_to_csv(df_to_convert):
-                        return df_to_convert.to_csv(index=False).encode('utf-8')
-
-                    csv = convert_df_to_csv(df)
-                    st.download_button(
-                        label="⬇️ Download Report as CSV",
-                        data=csv,
-                        file_name="soc2_evidence_report.csv",
-                        mime="text/csv",
-                    )
-                else:
-                    st.warning("The tracer ran successfully but found no S3 buckets to analyze.")
-            except Exception as e:
-                st.error(f"An unexpected error occurred: {e}")
+        except Exception as e:
+            st.error(f"An unexpected error occurred: {e}")
+            progress_bar.empty()
