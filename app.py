@@ -63,7 +63,6 @@ if st.button("🔎 Map Evidence", type="secondary"):
         st.error("Please provide the Role ARN from the CloudFormation setup.")
     # ... (rest of your checks) ...
     else:
-        # --- PROGRESS BAR AND REAL-TIME UPDATES ---
         progress_bar = st.progress(0, text="Initializing...")
         status_text = st.empty()
         all_findings = []
@@ -74,25 +73,29 @@ if st.button("🔎 Map Evidence", type="secondary"):
                 external_id=st.session_state.external_id
             )
 
-            # The first item yielded is the total count
-            total_items, initial_finding = next(processor.run_s3_checks())
+            # --- CORRECTED LOGIC ---
+            # 1. Create the generator object ONCE
+            s3_checks_generator = processor.run_s3_checks()
 
-            if initial_finding and initial_finding[0].status == 'ERROR':
-                st.error(f"Could not connect to AWS: {initial_finding[0].description}")
-                progress_bar.empty()  # Remove the progress bar
+            # 2. Get the first yielded item (the total count)
+            total_items, initial_findings = next(s3_checks_generator)
+
+            if initial_findings and initial_findings[0].status == 'ERROR':
+                st.error(f"Could not connect to AWS: {initial_findings[0].description}")
+                progress_bar.empty()
             elif total_items == 0:
                 st.warning("The tracer ran successfully but found no S3 buckets to analyze.")
                 progress_bar.empty()
             else:
-                # Now, loop through the rest of the yielded findings
-                for i, (total, findings_batch) in enumerate(processor.run_s3_checks()):
+                # 3. Loop through the REST of the items from the SAME generator
+                for i, (_, findings_batch) in enumerate(s3_checks_generator, start=1):
                     if findings_batch:
                         finding = findings_batch[0]
                         all_findings.append(finding)
 
                         # Update UI in real-time
-                        progress_percentage = (i + 1) / total_items
-                        progress_bar.progress(progress_percentage, text=f"Scanning item {i + 1}/{total_items}")
+                        progress_percentage = i / total_items
+                        progress_bar.progress(progress_percentage, text=f"Scanning item {i}/{total_items}")
                         status_text.info(f"Checking resource: {finding.resource}...")
 
                 status_text.success("Scan complete!")
@@ -102,7 +105,6 @@ if st.button("🔎 Map Evidence", type="secondary"):
 
                 fresh_count = sum(1 for f in all_findings if f.freshness.name == 'FRESH')
                 stale_count = sum(1 for f in all_findings if f.freshness.name == 'STALE')
-                expired_count = sum(1 for f in all_findings if f.freshness.name == 'EXPIRED')
 
                 health_score = (fresh_count / total_items) * 100
 
@@ -110,7 +112,7 @@ if st.button("🔎 Map Evidence", type="secondary"):
                 col1, col2, col3 = st.columns(3)
                 col1.metric("Fresh Evidence", fresh_count)
                 col2.metric("Stale Evidence", stale_count)
-                col3.metric("Expired Evidence", expired_count)
+                col3.metric("Expired Evidence", len(all_findings) - fresh_count - stale_count)
 
                 display_data = [{
                     "control_id": f.control_id, "resource": f.resource, "status": f.status,
@@ -137,4 +139,5 @@ if st.button("🔎 Map Evidence", type="secondary"):
 
         except Exception as e:
             st.error(f"An unexpected error occurred: {e}")
-            progress_bar.empty()
+            if 'progress_bar' in locals():
+                progress_bar.empty()
