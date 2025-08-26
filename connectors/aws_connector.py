@@ -5,6 +5,7 @@ from botocore.exceptions import ClientError
 class AWSConnector:
     """A class to handle connections and interactions with AWS by assuming a customer's IAM Role."""
 
+    # The __init__ method now accepts a 'region' parameter.
     def __init__(self, role_arn, external_id, region='us-east-1'):
         """
         Initializes the AWSConnector by assuming a role to get temporary credentials.
@@ -15,11 +16,12 @@ class AWSConnector:
         """
         self.role_arn = role_arn
         self.external_id = external_id
+        # The region is now stored as an instance variable.
         self.region_name = region
         self.session = self._create_session()
 
         if self.session:
-            print("✅ AWS session established successfully by assuming role.")
+            print(f"✅ AWS session established successfully in region '{self.region_name}' by assuming role.")
         else:
             print("❌ Failed to establish AWS session.")
 
@@ -36,6 +38,7 @@ class AWSConnector:
 
             credentials = assumed_role_object['Credentials']
 
+            # The session is now created using the provided region.
             return boto3.Session(
                 aws_access_key_id=credentials['AccessKeyId'],
                 aws_secret_access_key=credentials['SecretAccessKey'],
@@ -43,7 +46,7 @@ class AWSConnector:
                 region_name=self.region_name
             )
         except ClientError as e:
-            print(f"❌ Could not assume role. Please check the provided ARN and External ID. Error: {e}")
+            print(f"❌ Could not assume role. Error: {e}")
             return None
 
     def list_s3_buckets(self):
@@ -53,9 +56,7 @@ class AWSConnector:
         try:
             s3_client = self.session.client('s3')
             response = s3_client.list_buckets()
-            buckets = [bucket['Name'] for bucket in response['Buckets']]
-            print("Successfully retrieved S3 buckets.")
-            return buckets
+            return [bucket['Name'] for bucket in response['Buckets']]
         except ClientError as e:
             print(f"❌ An unexpected error occurred while listing buckets: {e}")
             return None
