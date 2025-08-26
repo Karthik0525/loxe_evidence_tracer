@@ -1,6 +1,7 @@
 from botocore.exceptions import ClientError
 from .data_models import EvidenceFinding
 
+
 class RulesEngine:
     """
     Contains a set of rules to check for SOC 2 compliance evidence in AWS.
@@ -9,21 +10,29 @@ class RulesEngine:
     def __init__(self, aws_connector):
         """
         Initializes the RulesEngine with a pre-configured AWSConnector.
-
-        :param aws_connector: An instance of the AWSConnector class.
         """
         self.connector = aws_connector
-        self.s3_client = self.connector.session.client('s3')
+        # IMPORTANT: Check if the session is valid before creating clients.
+        self.s3_client = None
+        if self.connector and self.connector.session:
+            self.s3_client = self.connector.session.client('s3')
+
         print("✅ RulesEngine initialized.")
 
     def check_s3_public_access_block(self, bucket_name):
         """
         Checks if a specific S3 bucket has the Public Access Block enabled.
-        This is a common requirement for SOC 2 CC6.1.
-
-        :param bucket_name: The name of the S3 bucket to check.
-        :return: An EvidenceFinding dataclass object.
         """
+        # If the s3_client couldn't be created, we can't run the check.
+        if not self.s3_client:
+            return EvidenceFinding(
+                control_id='CC6.1',
+                resource=bucket_name,
+                status='ERROR',
+                description='Could not run check because the S3 client is not available.',
+                evidence={'error': 'Invalid AWS session.'}
+            )
+
         status = ''
         description = ''
         evidence_details = {}
@@ -65,7 +74,3 @@ class RulesEngine:
             description=description,
             evidence=evidence_details
         )
-
-
-if __name__ == "__main__":
-    print("RulesEngine defined. Ready to be used by the Evidence Processor.")
