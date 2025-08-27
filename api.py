@@ -18,18 +18,16 @@ def perform_scan():
         if not role_arn or not external_id:
             return jsonify({"error": "role_arn and external_id are required."}), 400
 
+        # The processor will now raise a specific error if connection fails
         processor = EvidenceProcessor(role_arn=role_arn, external_id=external_id, region=region)
-        findings = processor.run_s3_checks()  # This now returns a simple list
+        findings = processor.run_s3_checks()
 
-        # Check if the only result is an error from the processor
-        if findings and findings[0].status == 'ERROR':
-            return jsonify({"error": findings[0].description}), 400
-
-        # Convert the list of dataclass objects to a list of dictionaries for the JSON response
         return jsonify({"findings": [finding.__dict__ for finding in findings]})
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    # Catch the specific ValueError from our connector, or any other exception
+    except (ValueError, ConnectionError, Exception) as e:
+        # Return the specific, user-friendly error message
+        return jsonify({"error": str(e)}), 400
 
 
 if __name__ == '__main__':

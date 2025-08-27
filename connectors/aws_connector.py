@@ -1,44 +1,28 @@
+# connectors/aws_connector.py
+
 import boto3
 from botocore.exceptions import ClientError
 
 
 class AWSConnector:
-    """A class to handle connections and interactions with AWS by assuming a customer's IAM Role."""
-
-    # The __init__ method now accepts a 'region' parameter.
     def __init__(self, role_arn, external_id, region='us-east-1'):
-        """
-        Initializes the AWSConnector by assuming a role to get temporary credentials.
-
-        :param role_arn: The ARN of the IAM role to assume.
-        :param external_id: The unique external ID required to assume the role.
-        :param region: The AWS region to operate in.
-        """
         self.role_arn = role_arn
         self.external_id = external_id
-        # The region is now stored as an instance variable.
         self.region_name = region
         self.session = self._create_session()
 
         if self.session:
-            print(f"✅ AWS session established successfully in region '{self.region_name}' by assuming role.")
-        else:
-            print("❌ Failed to establish AWS session.")
+            print(f"✅ AWS session established successfully in region '{self.region_name}'.")
 
     def _create_session(self):
-        """Creates a boto3 session using temporary credentials from an assumed role."""
         try:
             sts_client = boto3.client('sts')
-
             assumed_role_object = sts_client.assume_role(
                 RoleArn=self.role_arn,
                 RoleSessionName="LoxeEvidenceTracerSession",
                 ExternalId=self.external_id
             )
-
             credentials = assumed_role_object['Credentials']
-
-            # The session is now created using the provided region.
             return boto3.Session(
                 aws_access_key_id=credentials['AccessKeyId'],
                 aws_secret_access_key=credentials['SecretAccessKey'],
@@ -46,17 +30,36 @@ class AWSConnector:
                 region_name=self.region_name
             )
         except ClientError as e:
-            print(f"❌ Could not assume role. Error: {e}")
-            return None
+            # --- NEW: Granular Error Analysis ---
+            error_code = e.response['Error']['Code']
+            error_message = e.response['Error']['Message']
+
+            if error_code == 'AccessDenied':
+                if 'ExternalId' in error_message:
+                    # This is the most common error we expect to see
+                    raise ValueError(
+                        "The External ID is incorrect. Please refresh the page to generate a new ID and try the setup process again.")
+                else:
+                    # This error means the loxe-app-backend-user is misconfigured
+                    raise ValueError("Access Denied. Please check the permissions of the application's backend user.")
+            elif error_code == 'ValidationError':
+                # This error means the ARN is formatted incorrectly
+                raise ValueError(
+                    "The Role ARN format is invalid. Please copy it again from the CloudFormation Outputs tab.")
+            else:
+                # Catch any other AWS errors
+                raise ValueError(f"An unexpected AWS error occurred: {error_message}")
+        except Exception as e:
+            # Catch non-AWS errors
+            raise ValueError(f"An unexpected error occurred: {e}")
 
     def list_s3_buckets(self):
-        """Connects to S3 and lists all buckets using the temporary session."""
         if not self.session:
-            return None
+            # This will now be caught by the processor
+            raise ConnectionError("Cannot list S3 buckets because the AWS session was not established.")
         try:
             s3_client = self.session.client('s3')
             response = s3_client.list_buckets()
             return [bucket['Name'] for bucket in response['Buckets']]
         except ClientError as e:
-            print(f"❌ An unexpected error occurred while listing buckets: {e}")
-            return None
+            raise ConnectionError(f"An AWS error occurred while listing buckets: {e.response['Error']['Message']}")
