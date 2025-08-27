@@ -11,26 +11,22 @@ CORS(app)
 def perform_scan():
     try:
         data = request.json
-        role_arn = data['role_arn']
-        external_id = data['external_id']
-        region = data.get('region', 'us-east-1')  # Get region from request, default to us-east-1
+        role_arn = data.get('role_arn')
+        external_id = data.get('external_id')
+        region = data.get('region', 'us-east-2')
 
-        # Pass the region down to the processor
+        if not role_arn or not external_id:
+            return jsonify({"error": "role_arn and external_id are required."}), 400
+
         processor = EvidenceProcessor(role_arn=role_arn, external_id=external_id, region=region)
+        findings = processor.run_s3_checks()  # This now returns a simple list
 
-        findings_generator = processor.run_s3_checks()
-        total_items, initial_findings = next(findings_generator)
+        # Check if the only result is an error from the processor
+        if findings and findings[0].status == 'ERROR':
+            return jsonify({"error": findings[0].description}), 400
 
-        if initial_findings and initial_findings[0].status == 'ERROR':
-            return jsonify({"error": initial_findings[0].description}), 400
-
-        # Collect all findings from the generator
-        results = [finding_batch[0] for _, finding_batch in findings_generator]
-
-        return jsonify({
-            "total_items": total_items,
-            "findings": [finding.__dict__ for finding in results]
-        })
+        # Convert the list of dataclass objects to a list of dictionaries for the JSON response
+        return jsonify({"findings": [finding.__dict__ for finding in findings]})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
