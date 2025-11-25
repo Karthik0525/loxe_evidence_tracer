@@ -1,8 +1,7 @@
-# core/evidence_processor.py
-
 from connectors.aws_connector import AWSConnector
 from .rules_engine import RulesEngine
 from .data_models import EvidenceFinding
+from datetime import datetime
 
 
 class EvidenceProcessor:
@@ -11,22 +10,69 @@ class EvidenceProcessor:
         self.rules_engine = RulesEngine(self.connector)
         print("✅ EvidenceProcessor initialized.")
 
-    def run_s3_checks(self):
+    def collect_assets(self):
         """
-        Runs all S3 checks and returns a complete list of findings.
+        Scans the environment to build a complete Inventory of assets.
+        Returns a list of dictionaries ready for the 'Asset' DB table.
         """
         if not self.connector.session:
-            return [EvidenceFinding(
-                control_id='N/A', resource=self.connector.role_arn, status='ERROR',
-                description='Failed to assume IAM Role. Check ARN, External ID, and Region.', evidence={}
-            )]
-
-        s3_buckets = self.connector.list_s3_buckets()
-        if s3_buckets is None:
-            # An error occurred in the connector, which already printed a message.
             return []
+
+        assets = []
+        s3_client = self.connector.session.client('s3')
+
+        try:
+            # List all buckets
+            response = s3_client.list_buckets()
+            for bucket in response.get('Buckets', []):
+                name = bucket['Name']
+                creation_date = bucket['CreationDate']
+
+                # Get Region (Crucial for Context)
+                # API quirk: us-east-1 often returns None
+                try:
+                    loc_resp = s3_client.get_bucket_location(Bucket=name)
+                    region = loc_resp.get('LocationConstraint') or 'us-east-1'
+                except:
+                    region = 'unknown'
+
+                # Construct the Asset Dictionary
+                asset = {
+                    "name": name,
+                    "resourceId": f"arn:aws:s3:::{name}",  # Unique ID
+                    "type": "AWS::S3::Bucket",
+                    "provider": "AWS",
+                    "region": region,
+                    "status": "UNKNOWN",  # Will be updated by the scan later
+                    "metadata": {
+                        "creation_date": creation_date.isoformat(),
+                        "owner_id": response.get('Owner', {}).get('ID')
+                    },
+                    "updatedAt": datetime.now()
+                }
+                assets.append(asset)
+
+        except Exception as e:
+            print(f"⚠️ Error collecting assets: {e}")
+
+        print(f"✅ Collected {len(assets)} assets for inventory.")
+        return assets
+
+    def run_s3_checks(self):
+        """
+        Runs all S3 checks and returns findings.
+        """
+        if not self.connector.session:
+            return []  # Return empty list on connection failure
+
+        # We use the connector's list method or the one we just built
+        # For simplicity, let's use the connector's existing method
+        try:
+            s3_buckets = self.connector.list_s3_buckets()
+        except:
+            return []
+
         if not s3_buckets:
-            # It's not an error, there are just no buckets. Return an empty list.
             return []
 
         all_findings = []
