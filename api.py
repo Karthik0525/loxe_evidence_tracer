@@ -79,6 +79,10 @@ def run_background_scan(role_arn: str, scan_id: str, cloud_account_id: str, exte
         print(f"💥 Scan failed: {e}")
         # Update DB with failure status
         update_scan_results(scan_id, "FAILED", 0, {"error": str(e)})
+        try:
+            update_scan_results(scan_id, "FAILED", 0, {"error": str(e)})
+        except:
+            print("Could not update DB with failure status.")
 
 
 # 3. The Scan Endpoint
