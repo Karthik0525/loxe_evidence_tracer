@@ -180,3 +180,22 @@ def insert_findings_bulk(findings_data: list):
     except Exception as e:
         print(f"❌ Failed to insert findings: {e}")
         # Don't raise, we don't want to crash the whole scan if just the details fail
+
+
+def clear_asset_findings(asset_ids: list):
+    """
+    Deletes all existing findings for the given list of Asset IDs.
+    This ensures we don't have duplicate/stale findings from previous scans.
+    """
+    if not asset_ids:
+        return
+    try:
+        with engine.connect() as connection:
+            # Postgres syntax for "Delete where ID is in this list"
+            query = text('DELETE FROM "Finding" WHERE "assetId" = ANY(:ids)')
+            connection.execute(query, {"ids": asset_ids})
+            connection.commit()
+            print(f"🧹 Cleared old findings for {len(asset_ids)} assets.")
+
+    except Exception as e:
+        print(f"⚠️ Failed to clear old findings: {e}")

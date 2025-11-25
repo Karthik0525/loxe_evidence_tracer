@@ -10,7 +10,7 @@ from datetime import datetime
 # --- UPDATED IMPORTS ---
 from core.evidence_processor import EvidenceProcessor
 from database import update_scan_results, upsert_assets, update_asset_status, get_asset_map, insert_findings_bulk, engine, \
-    text
+    text, clear_asset_findings
 from reporting.report_generator import generate_csv_string
 
 app = FastAPI()
@@ -37,28 +37,35 @@ def run_background_scan(role_arn: str, scan_id: str, cloud_account_id: str, exte
         assets = processor.collect_assets()
         upsert_assets(assets, cloud_account_id)
 
-        # --- NEW: Get the Map ---
-        # We need to know which Database ID belongs to which Bucket ARN
+        # Get the Map (ARN -> DB_ID)
         asset_map = get_asset_map(cloud_account_id)
-        # ------------------------
+
+        # --- THE FIX: Clear Old Data ---
+        # 1. Identify all assets we are about to check
+        all_scanned_asset_ids = list(asset_map.values())
+
+        # 2. Wipe their finding history so we start fresh
+        if all_scanned_asset_ids:
+            clear_asset_findings(all_scanned_asset_ids)
+        # -------------------------------
 
         # C. RUN CHECKS
         raw_findings_objects = processor.run_s3_checks()
 
         # D. PROCESS FINDINGS
-        findings_json = []  # For the "Scan" blob (Report)
-        finding_records = []  # For the "Finding" table (UI/AI)
+        findings_json = []
+        finding_records = []
         failure_count = 0
 
         for finding in raw_findings_objects:
-            # 1. Extract Data
+            # ... (Everything inside this loop stays EXACTLY the same) ...
+            # ... Extract Data ...
             f_control = getattr(finding, "control_id", "N/A")
             f_resource_name = getattr(finding, "resource", "Unknown")
             f_status = getattr(finding, "status", "UNKNOWN")
             f_desc = getattr(finding, "description", "")
             f_evidence = getattr(finding, "evidence", {})
 
-            # 2. JSON Blob Logic (Keep this for CSV download)
             finding_dict = {
                 "control_id": f_control,
                 "resource": f_resource_name,
@@ -71,35 +78,29 @@ def run_background_scan(role_arn: str, scan_id: str, cloud_account_id: str, exte
             if f_status in ["FAIL", "ERROR"]:
                 failure_count += 1
 
-            # 3. Update Asset Status & Prepare Finding Record
             if f_resource_name:
-                # Reconstruct ARN to find the Asset ID
                 arn = f"arn:aws:s3:::{f_resource_name}"
-
-                # Update status on the Asset itself
                 update_asset_status(cloud_account_id, arn, f_status)
 
-                # Link Finding to Asset
                 db_asset_id = asset_map.get(arn)
 
                 if db_asset_id and f_status == "FAIL":
-                    # Only save FAIL items to the finding table for clarity/noise reduction
                     finding_records.append({
                         "id": f"find_{uuid.uuid4().hex}",
                         "controlId": f_control,
                         "status": f_status,
                         "description": f_desc,
-                        "severity": "HIGH",  # Defaulting to HIGH for now
+                        "severity": "HIGH",
                         "assetId": db_asset_id,
                         "scanId": scan_id,
                         "updatedAt": datetime.now()
                     })
 
-        # E. Save Finding Records to DB
+        # E. Save Finding Records
         if finding_records:
             insert_findings_bulk(finding_records)
 
-        # F. Calculate Score & Finish
+        # ... (Calculate Score and Save Results logic stays same) ...
         total_items = len(findings_json)
         if total_items == 0:
             score = 100
