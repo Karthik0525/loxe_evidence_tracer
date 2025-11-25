@@ -1,7 +1,7 @@
 import os
+import uuid  # <-- Import UUID
 from sqlalchemy import create_engine, text
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.engine import URL
 from dotenv import load_dotenv
 import json
 
@@ -11,34 +11,34 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# Connect with auto-reconnect settings
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
 
 
 def upsert_assets(assets: list, cloud_account_id: str):
-    """
-    Bulk inserts or updates assets in the Postgres 'Asset' table.
-    """
     if not assets:
         return
 
-    # Prepare data for SQLAlchemy
-    # We inject the cloudAccountId and ensure metadata is JSON stringified
     records = []
     for asset in assets:
         record = asset.copy()
         record['cloudAccountId'] = cloud_account_id
-        # Ensure metadata is valid JSON
+
+        # --- THE FIX: Generate ID manually ---
+        # We generate a unique ID for every row (used only on insert)
+        # Postgres ignores this on update conflicts anyway.
+        record['id'] = f"asset_{uuid.uuid4().hex}"
+        # -------------------------------------
+
         if isinstance(record.get('metadata'), dict):
             record['metadata'] = json.dumps(record['metadata'], default=str)
         records.append(record)
 
     try:
         with engine.connect() as conn:
-            # Define the table structure roughly for the statement
-            # We use raw SQL table name "Asset"
             from sqlalchemy import Table, MetaData, Column, String, DateTime, JSON
             metadata_obj = MetaData()
+
+            # We MUST include the 'id' column in the table definition now
             asset_table = Table('Asset', metadata_obj,
                                 Column('id', String, primary_key=True),
                                 Column('resourceId', String),
@@ -52,19 +52,15 @@ def upsert_assets(assets: list, cloud_account_id: str):
                                 Column('updatedAt', DateTime)
                                 )
 
-            # Construct the Upsert Statement
+            # We pass the full record (INCLUDING 'id') to the insert statement
             stmt = insert(asset_table).values(records)
 
-            # Define what to do on conflict (Upsert logic)
-            # We match on the unique constraint [cloudAccountId, resourceId]
-            # We update everything except the ID
             update_dict = {
                 col.name: col
                 for col in stmt.excluded
                 if col.name not in ['id', 'resourceId', 'cloudAccountId']
             }
 
-            # Execute the upsert
             on_conflict_stmt = stmt.on_conflict_do_update(
                 index_elements=['cloudAccountId', 'resourceId'],
                 set_=update_dict
@@ -77,7 +73,6 @@ def upsert_assets(assets: list, cloud_account_id: str):
     except Exception as e:
         print(f"❌ Failed to upsert assets: {e}")
         raise e
-
 
 def update_scan_results(scan_id: str, status: str, score: int, findings: dict):
     try:
