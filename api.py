@@ -1,19 +1,19 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import os
 import json
 import io
 
-# --- LOCAL IMPORTS ---
+# --- UPDATED IMPORTS ---
 from core.evidence_processor import EvidenceProcessor
-from database import update_scan_results, upsert_assets, engine, text
+from database import update_scan_results, upsert_assets, update_asset_status, engine, \
+    text  # <-- Added update_asset_status
 from reporting.report_generator import generate_csv_string
 
 app = FastAPI()
 
 
-# 1. Request Model
 class ScanRequest(BaseModel):
     cloud_account_id: str
     role_arn: str
@@ -21,34 +21,30 @@ class ScanRequest(BaseModel):
     external_id: str
 
 
-# 2. Background Task Function
 def run_background_scan(role_arn: str, scan_id: str, cloud_account_id: str, external_id: str):
     print(f"🚀 Starting scan for {scan_id}...")
 
-    # Sanitize inputs
     role_arn = role_arn.strip()
     external_id = external_id.strip()
 
     try:
-        # A. Initialize the Processor
+        # A. Initialize
         processor = EvidenceProcessor(role_arn=role_arn, external_id=external_id, region='us-east-1')
 
-        # --- NEW STEP: INVENTORY COLLECTION ---
+        # B. INVENTORY (Status = UNKNOWN)
         print("🔍 Collecting Inventory...")
         assets = processor.collect_assets()
-
-        # Save Inventory to DB (The Memory)
         upsert_assets(assets, cloud_account_id)
-        # --------------------------------------
 
-        # B. Run the Compliance Checks
+        # C. RUN CHECKS
         raw_findings_objects = processor.run_s3_checks()
 
-        # C. Serialize Data
+        # D. SERIALIZE & SYNC STATUS (The Fix)
         findings_json = []
         failure_count = 0
 
         for finding in raw_findings_objects:
+            # 1. Prepare for Scan Report
             finding_dict = {
                 "control_id": getattr(finding, "control_id", "N/A"),
                 "resource": getattr(finding, "resource", "Unknown"),
@@ -58,17 +54,33 @@ def run_background_scan(role_arn: str, scan_id: str, cloud_account_id: str, exte
             }
             findings_json.append(finding_dict)
 
-            if finding_dict["status"] == "FAIL" or finding_dict["status"] == "ERROR":
+            # 2. Count Score
+            if finding_dict["status"] in ["FAIL", "ERROR"]:
                 failure_count += 1
 
-        # D. Calculate Score
+            # --- THE FIX: Update Inventory Status ---
+            # We must reconstruct the ARN because 'finding.resource' is just the name (e.g. "my-bucket")
+            # but the DB resourceId is the ARN (e.g. "arn:aws:s3:::my-bucket")
+            try:
+                resource_name = getattr(finding, "resource", "")
+                status = getattr(finding, "status", "UNKNOWN")
+
+                # Only S3 logic for now
+                if resource_name:
+                    arn = f"arn:aws:s3:::{resource_name}"
+                    update_asset_status(cloud_account_id, arn, status)
+            except Exception as update_err:
+                print(f"⚠️ Could not sync status: {update_err}")
+            # ----------------------------------------
+
+        # E. Calculate Score
         total_items = len(findings_json)
         if total_items == 0:
             score = 100
         else:
             score = int(((total_items - failure_count) / total_items) * 100)
 
-        # E. Save Results
+        # F. Save Scan Results
         update_scan_results(
             scan_id=scan_id,
             status="COMPLETED",
@@ -82,7 +94,8 @@ def run_background_scan(role_arn: str, scan_id: str, cloud_account_id: str, exte
         update_scan_results(scan_id, "FAILED", 0, {"error": str(e)})
 
 
-# 3. The Scan Endpoint
+# ... (The rest of the file: endpoints / download / health_check stay exactly the same)
+# Just make sure the @app.post and @app.get parts are still there at the bottom!
 @app.post("/scan")
 async def start_scan(request: ScanRequest, background_tasks: BackgroundTasks):
     background_tasks.add_task(
@@ -95,7 +108,6 @@ async def start_scan(request: ScanRequest, background_tasks: BackgroundTasks):
     return {"status": "Scan started", "scan_id": request.scan_id}
 
 
-# 4. The Download Endpoint (Stays the same)
 @app.get("/download/{scan_id}")
 def download_report(scan_id: str):
     with engine.connect() as conn:

@@ -98,3 +98,27 @@ def update_scan_results(scan_id: str, status: str, score: int, findings: dict):
     except Exception as e:
         print(f"❌ Failed to save to DB: {e}")
         raise e
+
+
+def update_asset_status(cloud_account_id: str, resource_id: str, status: str):
+    """
+    Updates the status of a specific asset.
+    """
+    try:
+        with engine.connect() as connection:
+            query = text("""
+                UPDATE "Asset"
+                SET status = :status
+                WHERE "cloudAccountId" = :cloud_account_id 
+                AND "resourceId" = :resource_id
+            """)
+
+            connection.execute(query, {
+                "status": status,
+                "cloud_account_id": cloud_account_id,
+                "resource_id": resource_id
+            })
+            connection.commit()
+
+    except Exception as e:
+        print(f"⚠️ Failed to update asset status for {resource_id}: {e}")
