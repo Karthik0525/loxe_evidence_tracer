@@ -22,6 +22,9 @@ class ScanRequest(BaseModel):
 def run_background_scan(role_arn: str, scan_id: str, cloud_account_id: str, external_id: str):
     print(f"🚀 Starting scan for {scan_id}...")
 
+    role_arn = role_arn.strip()
+    external_id = external_id.strip()
+
     try:
         # A. Initialize the Processor
         # Your EvidenceProcessor class expects (role_arn, external_id, region)
