@@ -4,11 +4,13 @@ from pydantic import BaseModel
 import os
 import json
 import io
+import uuid
+from datetime import datetime
 
 # --- UPDATED IMPORTS ---
 from core.evidence_processor import EvidenceProcessor
-from database import update_scan_results, upsert_assets, update_asset_status, engine, \
-    text  # <-- Added update_asset_status
+from database import update_scan_results, upsert_assets, update_asset_status, get_asset_map, insert_findings_bulk, engine, \
+    text
 from reporting.report_generator import generate_csv_string
 
 app = FastAPI()
@@ -23,7 +25,6 @@ class ScanRequest(BaseModel):
 
 def run_background_scan(role_arn: str, scan_id: str, cloud_account_id: str, external_id: str):
     print(f"🚀 Starting scan for {scan_id}...")
-
     role_arn = role_arn.strip()
     external_id = external_id.strip()
 
@@ -31,56 +32,80 @@ def run_background_scan(role_arn: str, scan_id: str, cloud_account_id: str, exte
         # A. Initialize
         processor = EvidenceProcessor(role_arn=role_arn, external_id=external_id, region='us-east-1')
 
-        # B. INVENTORY (Status = UNKNOWN)
+        # B. INVENTORY
         print("🔍 Collecting Inventory...")
         assets = processor.collect_assets()
         upsert_assets(assets, cloud_account_id)
 
+        # --- NEW: Get the Map ---
+        # We need to know which Database ID belongs to which Bucket ARN
+        asset_map = get_asset_map(cloud_account_id)
+        # ------------------------
+
         # C. RUN CHECKS
         raw_findings_objects = processor.run_s3_checks()
 
-        # D. SERIALIZE & SYNC STATUS (The Fix)
-        findings_json = []
+        # D. PROCESS FINDINGS
+        findings_json = []  # For the "Scan" blob (Report)
+        finding_records = []  # For the "Finding" table (UI/AI)
         failure_count = 0
 
         for finding in raw_findings_objects:
-            # 1. Prepare for Scan Report
+            # 1. Extract Data
+            f_control = getattr(finding, "control_id", "N/A")
+            f_resource_name = getattr(finding, "resource", "Unknown")
+            f_status = getattr(finding, "status", "UNKNOWN")
+            f_desc = getattr(finding, "description", "")
+            f_evidence = getattr(finding, "evidence", {})
+
+            # 2. JSON Blob Logic (Keep this for CSV download)
             finding_dict = {
-                "control_id": getattr(finding, "control_id", "N/A"),
-                "resource": getattr(finding, "resource", "Unknown"),
-                "status": getattr(finding, "status", "UNKNOWN"),
-                "description": getattr(finding, "description", ""),
-                "evidence": getattr(finding, "evidence", {})
+                "control_id": f_control,
+                "resource": f_resource_name,
+                "status": f_status,
+                "description": f_desc,
+                "evidence": f_evidence
             }
             findings_json.append(finding_dict)
 
-            # 2. Count Score
-            if finding_dict["status"] in ["FAIL", "ERROR"]:
+            if f_status in ["FAIL", "ERROR"]:
                 failure_count += 1
 
-            # --- THE FIX: Update Inventory Status ---
-            # We must reconstruct the ARN because 'finding.resource' is just the name (e.g. "my-bucket")
-            # but the DB resourceId is the ARN (e.g. "arn:aws:s3:::my-bucket")
-            try:
-                resource_name = getattr(finding, "resource", "")
-                status = getattr(finding, "status", "UNKNOWN")
+            # 3. Update Asset Status & Prepare Finding Record
+            if f_resource_name:
+                # Reconstruct ARN to find the Asset ID
+                arn = f"arn:aws:s3:::{f_resource_name}"
 
-                # Only S3 logic for now
-                if resource_name:
-                    arn = f"arn:aws:s3:::{resource_name}"
-                    update_asset_status(cloud_account_id, arn, status)
-            except Exception as update_err:
-                print(f"⚠️ Could not sync status: {update_err}")
-            # ----------------------------------------
+                # Update status on the Asset itself
+                update_asset_status(cloud_account_id, arn, f_status)
 
-        # E. Calculate Score
+                # Link Finding to Asset
+                db_asset_id = asset_map.get(arn)
+
+                if db_asset_id and f_status == "FAIL":
+                    # Only save FAIL items to the finding table for clarity/noise reduction
+                    finding_records.append({
+                        "id": f"find_{uuid.uuid4().hex}",
+                        "controlId": f_control,
+                        "status": f_status,
+                        "description": f_desc,
+                        "severity": "HIGH",  # Defaulting to HIGH for now
+                        "assetId": db_asset_id,
+                        "scanId": scan_id,
+                        "updatedAt": datetime.now()
+                    })
+
+        # E. Save Finding Records to DB
+        if finding_records:
+            insert_findings_bulk(finding_records)
+
+        # F. Calculate Score & Finish
         total_items = len(findings_json)
         if total_items == 0:
             score = 100
         else:
             score = int(((total_items - failure_count) / total_items) * 100)
 
-        # F. Save Scan Results
         update_scan_results(
             scan_id=scan_id,
             status="COMPLETED",

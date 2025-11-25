@@ -122,3 +122,61 @@ def update_asset_status(cloud_account_id: str, resource_id: str, status: str):
 
     except Exception as e:
         print(f"⚠️ Failed to update asset status for {resource_id}: {e}")
+
+
+def get_asset_map(cloud_account_id: str):
+    """
+    Returns a dictionary mapping Resource IDs (ARNs) to Internal Database IDs.
+    Example: {'arn:aws:s3:::my-bucket': 'asset_12345uuid'}
+    """
+    asset_map = {}
+    try:
+        with engine.connect() as conn:
+            # Fetch only the ID and resourceId for this account
+            query = text('SELECT id, "resourceId" FROM "Asset" WHERE "cloudAccountId" = :id')
+            result = conn.execute(query, {"id": cloud_account_id})
+
+            for row in result:
+                # row[0] is id, row[1] is resourceId
+                asset_map[row[1]] = row[0]
+
+        return asset_map
+    except Exception as e:
+        print(f"⚠️ Failed to fetch asset map: {e}")
+        return {}
+
+
+def insert_findings_bulk(findings_data: list):
+    """
+    Bulk inserts finding records into the Finding table.
+    """
+    if not findings_data:
+        return
+
+    try:
+        with engine.connect() as conn:
+            from sqlalchemy import Table, MetaData, Column, String, DateTime
+            metadata_obj = MetaData()
+
+            finding_table = Table('Finding', metadata_obj,
+                                  Column('id', String, primary_key=True),
+                                  Column('controlId', String),
+                                  Column('status', String),
+                                  Column('description', String),
+                                  Column('severity', String),
+                                  Column('assetId', String),
+                                  Column('scanId', String),
+                                  Column('updatedAt', DateTime)
+                                  )
+
+            # Use generic insert
+            stmt = insert(finding_table).values(findings_data)
+
+            # Execute
+            conn.execute(stmt)
+            conn.commit()
+            print(f"✅ Successfully inserted {len(findings_data)} finding records.")
+
+    except Exception as e:
+        print(f"❌ Failed to insert findings: {e}")
+        # Don't raise, we don't want to crash the whole scan if just the details fail
